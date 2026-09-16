@@ -1,0 +1,64 @@
+services:
+
+  db:
+    image: postgres:16-alpine
+    container_name: recruiter-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: recruiter
+      POSTGRES_USER: recruiter
+      POSTGRES_PASSWORD: recruiter
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - recruiter_postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recruiter -d recruiter"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  backend:
+    image: 032844082845.dkr.ecr.eu-north-1.amazonaws.com/recruiter-backend:${IMAGE_TAG}
+
+    container_name: recruiter-backend
+    restart: unless-stopped
+
+    env_file:
+      - ./backend.env
+
+    environment:
+      DATABASE_URL: postgresql+asyncpg://recruiter:recruiter@db:5432/recruiter
+
+    ports:
+      - "8000:8000"
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+
+  frontend:
+    image: 032844082845.dkr.ecr.eu-north-1.amazonaws.com/recruiter-frontend:${IMAGE_TAG}
+
+    container_name: recruiter-frontend
+    restart: unless-stopped
+
+    environment:
+      VITE_API_URL: ${VITE_API_URL}
+
+    ports:
+      - "5173:5173"
+
+    depends_on:
+      backend:
+        condition: service_started
+
+
+volumes:
+  recruiter_postgres_data:
