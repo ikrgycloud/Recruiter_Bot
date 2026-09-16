@@ -31,7 +31,7 @@ pipeline {
         // ==============================
         // APPLICATION URL
         // ==============================
-        VITE_API_URL = "http://16.16.216.155:8011/api"
+        VITE_API_URL = "https://recruvaai.nyrogpt.com/api"
     }
 
     stages {
