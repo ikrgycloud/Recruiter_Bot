@@ -16,7 +16,7 @@ pipeline {
 
         IMAGE_TAG = "${BUILD_NUMBER}"
 
-        APP_SERVER = "ubuntu@YOUR_APPLICATION_EC2_IP"
+        APP_SERVER = "ubuntu@16.16.216.155"
 
         APP_DIR = "/opt/recruiter"
     }
