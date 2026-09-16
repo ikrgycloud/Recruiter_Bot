@@ -17,5 +17,33 @@ services:
       timeout: 5s
       retries: 10
 
+  backend:
+    build:
+      context: ./backend
+    container_name: recruiter-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://recruiter:recruiter@db:5432/recruiter
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: recruiter-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api}
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_started
+
 volumes:
   recruiter_postgres_data:

@@ -17,6 +17,7 @@ async def overview(session: DbSession, user: User = Depends(get_current_user)) -
     agents = [{
         "id": str(agent.id), "device_name": agent.device_name, "platform": agent.platform,
         "version": agent.version, "status": agent.status, "last_seen_at": agent.last_seen_at,
+        "mailbox_email": agent.mailbox_email, "mailbox_connected": agent.mailbox_connected,
     } for agent in agent_rows]
     email_count = await session.scalar(select(func.count(EmailMessage.id)).where(EmailMessage.user_id == user.id))
     reschedule_count = await session.scalar(select(func.count(EmailMessage.id)).where(

@@ -6,19 +6,24 @@ Initial workspace for the recruiting automation platform.
 
 - `backend/`: FastAPI service using PostgreSQL, JWT authentication, company registration, agent registration, and heartbeats.
 - `agent/`: Python desktop agent with first-run registration/login, system startup registration, tray status, and five-second startup notification.
-- `docker-compose.yml`: Local PostgreSQL 16 database.
+- `frontend/`: React portal for recruiter/admin login and live database-backed views.
+- `docker-compose.yml`: Three-service local stack: PostgreSQL, backend, and frontend.
 
-## Start the backend
+## Start the complete application
 
 ```powershell
-docker compose up -d db
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+docker compose up -d --build
 ```
+
+This starts exactly three containers:
+
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:8000`
+- PostgreSQL: host port `5433`
+
+The backend container uses `db:5432` internally. The desktop agent uses `http://localhost:8000/api` when it runs on the same system.
+
+API documentation: `http://localhost:8000/docs`
 
 ## Start the agent
 
@@ -33,7 +38,7 @@ copy .env.example .env
 python -m app.main
 ```
 
-The first run opens a registration form for company email, company name, and company details only. The system hostname is used as the employee/system identity, and the app then saves that session and starts directly in the tray on later runs. The agent also shows a 5-second startup popup and is registered to auto-start on the device.
+The first run opens employee registration, then asks you to connect the mailbox for that agent. The agent remains `awaiting_mailbox` until a Gmail account is selected through Google OAuth. After connection, it changes to `running`, sends heartbeats, shows the five-second popup, and registers for auto-start.
 
 ## Important next step
 

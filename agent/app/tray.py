@@ -63,9 +63,8 @@ class TrayAgent:
             enable_autostart()
             threading.Thread(target=self._heartbeat_loop, daemon=True).start()
         except ApiError as error:
-            if error.status_code == 401:
-                return False
             self.status = "Offline"
+            return False
         self.icon.run()
         return True
 
