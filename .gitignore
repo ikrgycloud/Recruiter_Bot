@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.spec
+build/
+dist/
+.pytest_cache/
+.pdf-read-tmp/
+agent/*.json
