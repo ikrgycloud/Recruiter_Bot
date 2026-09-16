@@ -2,37 +2,43 @@ pipeline {
 
     agent any
 
-
     environment {
 
-        AWS_REGION     = "eu-north-1"
+        // ==============================
+        // AWS CONFIGURATION
+        // ==============================
+        AWS_REGION = "eu-north-1"
         AWS_ACCOUNT_ID = "032844082845"
 
-        BACKEND_REPO  = "recruiter-backend"
+        // ==============================
+        // ECR REPOSITORIES
+        // ==============================
+        BACKEND_REPO = "recruiter-backend"
         FRONTEND_REPO = "recruiter-frontend"
 
+        // Jenkins build number becomes Docker image tag
         IMAGE_TAG = "${BUILD_NUMBER}"
 
-        ECR_REGISTRY =
-            "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        // ECR registry
+        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-
-        // Recruiter Bot Application EC2
+        // ==============================
+        // APPLICATION EC2
+        // ==============================
         APP_SERVER = "ubuntu@16.16.216.155"
-
         APP_DIR = "/opt/recruiter"
-    }
 
+        // ==============================
+        // APPLICATION URL
+        // ==============================
+        VITE_API_URL = "http://16.16.216.155:8011/api"
+    }
 
     stages {
 
-
-        /*
-         * ============================================================
-         * 1. CHECKOUT
-         * ============================================================
-         */
-
+        // ============================================================
+        // 1. CHECKOUT
+        // ============================================================
         stage('Checkout') {
 
             steps {
@@ -42,22 +48,21 @@ pipeline {
                 echo "======================================="
 
                 checkout scm
+
+                echo "Checkout completed successfully"
             }
         }
 
 
-        /*
-         * ============================================================
-         * 2. BUILD BACKEND
-         * ============================================================
-         */
-
+        // ============================================================
+        // 2. BUILD BACKEND
+        // ============================================================
         stage('Build Backend') {
 
             steps {
 
                 echo "======================================="
-                echo "Building Recruiter Bot Backend"
+                echo "Building Backend Docker Image"
                 echo "======================================="
 
                 sh """
@@ -65,40 +70,39 @@ pipeline {
                         -t ${BACKEND_REPO}:${IMAGE_TAG} \
                         ./backend
                 """
+
+                echo "Backend image built successfully"
             }
         }
 
 
-        /*
-         * ============================================================
-         * 3. BUILD FRONTEND
-         * ============================================================
-         */
-
+        // ============================================================
+        // 3. BUILD FRONTEND
+        // ============================================================
         stage('Build Frontend') {
 
             steps {
 
                 echo "======================================="
-                echo "Building Recruiter Bot Frontend"
+                echo "Building Frontend Docker Image"
                 echo "======================================="
 
                 sh """
                     docker build \
+                        --build-arg VITE_API_URL="${VITE_API_URL}" \
                         -t ${FRONTEND_REPO}:${IMAGE_TAG} \
                         ./frontend
                 """
+
+                echo "Frontend image built successfully"
             }
         }
 
 
-        /*
-         * ============================================================
-         * 4. LOGIN TO ECR
-         * ============================================================
-         */
-
-        stage('Login to Amazon ECR') {
+        // ============================================================
+        // 4. LOGIN TO ECR
+        // ============================================================
+        stage('Login to ECR') {
 
             steps {
 
@@ -107,13 +111,13 @@ pipeline {
                 echo "======================================="
 
                 withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-ecr'
-                    ]
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-ecr']
                 ]) {
 
                     sh """
+                        aws sts get-caller-identity
+
                         aws ecr get-login-password \
                             --region ${AWS_REGION} |
                         docker login \
@@ -122,16 +126,15 @@ pipeline {
                             ${ECR_REGISTRY}
                     """
                 }
+
+                echo "ECR login successful"
             }
         }
 
 
-        /*
-         * ============================================================
-         * 5. TAG IMAGES
-         * ============================================================
-         */
-
+        // ============================================================
+        // 5. TAG IMAGES
+        // ============================================================
         stage('Tag Images') {
 
             steps {
@@ -141,93 +144,71 @@ pipeline {
                 echo "======================================="
 
                 sh """
-
                     docker tag \
                         ${BACKEND_REPO}:${IMAGE_TAG} \
                         ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
 
-
                     docker tag \
                         ${FRONTEND_REPO}:${IMAGE_TAG} \
                         ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
-
                 """
+
+                echo "Docker images tagged successfully"
             }
         }
 
 
-        /*
-         * ============================================================
-         * 6. PUSH BACKEND
-         * ============================================================
-         */
-
+        // ============================================================
+        // 6. PUSH BACKEND
+        // ============================================================
         stage('Push Backend') {
 
             steps {
 
                 echo "======================================="
-                echo "Pushing Recruiter Bot Backend Image"
+                echo "Pushing Backend Image to ECR"
                 echo "======================================="
 
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-ecr'
-                    ]
-                ]) {
+                sh """
+                    docker push \
+                        ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+                """
 
-                    sh """
-                        docker push \
-                            ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
-                    """
-                }
+                echo "Backend image pushed successfully"
             }
         }
 
 
-        /*
-         * ============================================================
-         * 7. PUSH FRONTEND
-         * ============================================================
-         */
-
+        // ============================================================
+        // 7. PUSH FRONTEND
+        // ============================================================
         stage('Push Frontend') {
 
             steps {
 
                 echo "======================================="
-                echo "Pushing Recruiter Bot Frontend Image"
+                echo "Pushing Frontend Image to ECR"
                 echo "======================================="
 
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-ecr'
-                    ]
-                ]) {
+                sh """
+                    docker push \
+                        ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+                """
 
-                    sh """
-                        docker push \
-                            ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
-                    """
-                }
+                echo "Frontend image pushed successfully"
             }
         }
 
 
-        /*
-         * ============================================================
-         * 8. DEPLOY TO APPLICATION EC2
-         * ============================================================
-         */
-
+        // ============================================================
+        // 8. DEPLOY TO APPLICATION EC2
+        // ============================================================
         stage('Deploy to Application EC2') {
 
             steps {
 
                 echo "======================================="
-                echo "Deploying Recruiter Bot to Application EC2"
+                echo "Deploying Recruiter Bot"
                 echo "======================================="
 
                 sshagent(credentials: ['app-server-ssh']) {
@@ -238,32 +219,29 @@ pipeline {
                             -o StrictHostKeyChecking=no \
                             ${APP_SERVER} \
                         '
-
                             set -e
-
 
                             echo "======================================="
                             echo "Connected to Application EC2"
                             echo "======================================="
 
-
-                            echo "Changing directory..."
-
                             cd ${APP_DIR}
 
-
-                            echo "Checking Docker..."
+                            echo "======================================="
+                            echo "Checking Docker"
+                            echo "======================================="
 
                             docker --version
 
-
-                            echo "Checking Docker Compose..."
+                            echo "======================================="
+                            echo "Checking Docker Compose"
+                            echo "======================================="
 
                             docker compose version
 
-
-                            echo "Logging Application EC2 into ECR..."
-
+                            echo "======================================="
+                            echo "Logging into Amazon ECR"
+                            echo "======================================="
 
                             aws ecr get-login-password \
                                 --region ${AWS_REGION} |
@@ -272,60 +250,79 @@ pipeline {
                                 --password-stdin \
                                 ${ECR_REGISTRY}
 
+                            echo "======================================="
+                            echo "Deployment Information"
+                            echo "======================================="
 
-                            echo "Preparing image variables..."
+                            echo "Image Tag: ${IMAGE_TAG}"
 
+                            echo "Backend:"
+                            echo "${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}"
+
+                            echo "Frontend:"
+                            echo "${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}"
+
+                            echo "======================================="
+                            echo "Setting Deployment Variables"
+                            echo "======================================="
 
                             export IMAGE_TAG=${IMAGE_TAG}
 
-                            export BACKEND_IMAGE=${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
+                            export VITE_API_URL="${VITE_API_URL}"
 
-                            export FRONTEND_IMAGE=${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
+                            echo "IMAGE_TAG=\${IMAGE_TAG}"
+                            echo "VITE_API_URL=\${VITE_API_URL}"
 
-
-                            echo "Backend Image:"
-                            echo "${BACKEND_IMAGE}"
-
-
-                            echo "Frontend Image:"
-                            echo "${FRONTEND_IMAGE}"
-
-
-                            echo "Pulling new Recruiter Bot images..."
-
+                            echo "======================================="
+                            echo "Pulling Backend Image"
+                            echo "======================================="
 
                             docker compose \
                                 -f docker-compose.prod.yml \
-                                pull backend frontend
+                                pull backend
 
+                            echo "======================================="
+                            echo "Pulling Frontend Image"
+                            echo "======================================="
 
-                            echo "Starting / updating Recruiter Bot services..."
+                            docker compose \
+                                -f docker-compose.prod.yml \
+                                pull frontend
 
+                            echo "======================================="
+                            echo "Starting Application"
+                            echo "======================================="
 
                             docker compose \
                                 -f docker-compose.prod.yml \
                                 up -d
 
+                            echo "======================================="
+                            echo "Waiting for Services"
+                            echo "======================================="
 
-                            echo "Running database migrations..."
+                            sleep 10
 
+                            echo "======================================="
+                            echo "Running Database Migration"
+                            echo "======================================="
 
                             docker compose \
                                 -f docker-compose.prod.yml \
                                 exec -T backend \
                                 alembic upgrade head
 
-
-                            echo "Deployment completed."
-
-
-                            echo "Current container status:"
-
+                            echo "======================================="
+                            echo "Container Status"
+                            echo "======================================="
 
                             docker compose \
                                 -f docker-compose.prod.yml \
                                 ps
 
+                            echo "======================================="
+                            echo "Deployment Completed"
+                            echo "======================================="
                         '
                     """
                 }
@@ -333,12 +330,9 @@ pipeline {
         }
 
 
-        /*
-         * ============================================================
-         * 9. VERIFY DEPLOYMENT
-         * ============================================================
-         */
-
+        // ============================================================
+        // 9. VERIFY DEPLOYMENT
+        // ============================================================
         stage('Verify Deployment') {
 
             steps {
@@ -355,59 +349,49 @@ pipeline {
                             -o StrictHostKeyChecking=no \
                             ${APP_SERVER} \
                         '
-
                             set -e
 
-
                             cd ${APP_DIR}
-
 
                             echo "======================================="
                             echo "Container Status"
                             echo "======================================="
 
+                            export IMAGE_TAG=${IMAGE_TAG}
 
                             docker compose \
                                 -f docker-compose.prod.yml \
                                 ps
 
-
                             echo "======================================="
-                            echo "Backend Health Check"
+                            echo "Testing Backend"
                             echo "======================================="
-
 
                             curl \
                                 --fail \
                                 --silent \
                                 --show-error \
-                                http://localhost:8000/ \
+                                http://localhost:8011/docs \
                                 > /dev/null
 
-
-                            echo "Backend is UP"
-
+                            echo "Backend is responding successfully"
 
                             echo "======================================="
-                            echo "Frontend Health Check"
+                            echo "Testing Frontend"
                             echo "======================================="
-
 
                             curl \
                                 --fail \
                                 --silent \
                                 --show-error \
-                                http://localhost:5173/ \
+                                http://localhost:86/ \
                                 > /dev/null
 
-
-                            echo "Frontend is UP"
-
+                            echo "Frontend is responding successfully"
 
                             echo "======================================="
-                            echo "Recruiter Bot Deployment Verified"
+                            echo "Deployment Verification Successful"
                             echo "======================================="
-
                         '
                     """
                 }
@@ -416,23 +400,22 @@ pipeline {
     }
 
 
-    /*
-     * ================================================================
-     * POST ACTIONS
-     * ================================================================
-     */
-
+    // ================================================================
+    // POST ACTIONS
+    // ================================================================
     post {
 
+        // ============================================================
+        // SUCCESS
+        // ============================================================
         success {
 
             echo """
             =======================================
-              RECRUITER BOT DEPLOYMENT SUCCESSFUL
+            RECRUITER BOT DEPLOYMENT SUCCESSFUL
             =======================================
 
-            Build Number:
-            ${BUILD_NUMBER}
+            Build Number : ${BUILD_NUMBER}
 
             Backend Image:
             ${ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}
@@ -440,35 +423,43 @@ pipeline {
             Frontend Image:
             ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
 
-            Application Server:
-            ${APP_SERVER}
+            Backend:
+            http://16.16.216.155:8011/docs
 
-            Application Directory:
-            ${APP_DIR}
+            Frontend:
+            http://16.16.216.155:86
 
             =======================================
             """
         }
 
 
+        // ============================================================
+        // FAILURE
+        // ============================================================
         failure {
 
             echo """
             =======================================
-              RECRUITER BOT DEPLOYMENT FAILED
+            RECRUITER BOT DEPLOYMENT FAILED
             =======================================
 
-            Build Number:
-            ${BUILD_NUMBER}
+            Build Number : ${BUILD_NUMBER}
 
-            Check Jenkins Console Output.
+            Please check the Jenkins console output
+            for the failed stage and error.
 
             =======================================
             """
         }
 
 
+        // ============================================================
+        // ALWAYS
+        // ============================================================
         always {
+
+            echo "Cleaning Jenkins workspace..."
 
             cleanWs()
         }
