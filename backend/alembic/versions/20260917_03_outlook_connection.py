@@ -2,6 +2,7 @@
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from sqlalchemy import inspect
 
 
 revision = "20260917_03"
@@ -11,6 +12,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if "outlook_connections" in inspect(op.get_bind()).get_table_names():
+        return
     op.create_table(
         "outlook_connections",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -23,4 +26,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("outlook_connections")
+    if "outlook_connections" in inspect(op.get_bind()).get_table_names():
+        op.drop_table("outlook_connections")
