@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/integrations/google/callback"
     google_frontend_url: str = "http://localhost:5173"
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+    microsoft_redirect_uri: str = "http://localhost:8000/api/integrations/outlook/callback"
     google_sync_interval_seconds: int = 60
     automation_auto_reschedule: bool = False
     token_encryption_key: str = ""

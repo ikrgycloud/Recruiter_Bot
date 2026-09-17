@@ -1,3 +1,4 @@
+import json
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -5,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+import httpx
 from google_auth_oauthlib.flow import Flow
 from jose import JWTError, jwt
 from sqlalchemy import select
@@ -15,8 +17,8 @@ from app.core.token_store import encrypt_token
 from app.db.database import SessionFactory
 from app.models.google_connection import GoogleConnection
 from app.models.user import User
-from app.models.agent import Agent
 from app.models.email_message import EmailMessage
+from app.models.outlook_connection import OutlookConnection
 from app.services.google_workspace import (classify_message, credentials_from_connection, find_events,
                                            freebusy, list_message_ids, move_event, read_message, run_sync,
                                            send_reply, profile_email)
@@ -47,23 +49,16 @@ def configured_flow(state: str | None = None) -> Flow:
                                    redirect_uri=settings.google_redirect_uri)
 
 
-def create_state(user_id: uuid.UUID, agent_id: uuid.UUID | None = None) -> str:
+def create_state(user_id: uuid.UUID, provider: str = "google") -> str:
     expires = datetime.now(timezone.utc) + timedelta(minutes=10)
-    claims = {"sub": str(user_id), "purpose": "google-oauth", "exp": expires}
-    if agent_id:
-        claims["agent_id"] = str(agent_id)
+    claims = {"sub": str(user_id), "purpose": "oauth", "provider": provider, "exp": expires}
     return jwt.encode(claims,
                       settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 @router.get("/google/authorize")
-async def google_authorize(agent_id: uuid.UUID | None = None, session: DbSession = None,
-                           user: User = Depends(get_current_user)) -> dict[str, str]:
-    if agent_id:
-        agent = await session.scalar(select(Agent).where(Agent.id == agent_id, Agent.company_id == user.company_id))
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-    state = create_state(user.id, agent_id)
+async def google_authorize(user: User = Depends(get_current_user)) -> dict[str, str]:
+    state = create_state(user.id)
     flow = configured_flow(state)
     authorization_url, _ = flow.authorization_url(access_type="offline", prompt="consent",
                                                     include_granted_scopes="true")
@@ -74,7 +69,7 @@ async def google_authorize(agent_id: uuid.UUID | None = None, session: DbSession
 async def google_callback(request: Request) -> RedirectResponse:
     error = request.query_params.get("error")
     if error:
-        target = f"{settings.google_frontend_url}/dashboard/settings?google=error&reason={urllib.parse.quote(error)}"
+        target = f"{settings.google_frontend_url}/dashboard/integrations?google=error&reason={urllib.parse.quote(error)}"
         return RedirectResponse(target)
     state = request.query_params.get("state")
     code = request.query_params.get("code")
@@ -82,7 +77,7 @@ async def google_callback(request: Request) -> RedirectResponse:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Google OAuth callback data")
     try:
         payload = jwt.decode(state, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        if payload.get("purpose") != "google-oauth":
+        if payload.get("purpose") != "oauth" or payload.get("provider") != "google":
             raise JWTError
         user_id = uuid.UUID(payload["sub"])
     except (JWTError, KeyError, ValueError):
@@ -102,16 +97,81 @@ async def google_callback(request: Request) -> RedirectResponse:
             session.add(connection)
         else:
             connection.token_json = encrypt_token(credentials.to_json())
-        agent_id = payload.get("agent_id")
-        if agent_id:
-            agent = await session.scalar(select(Agent).where(Agent.id == uuid.UUID(agent_id), Agent.company_id == user.company_id))
-            if agent:
-                agent.mailbox_email = mailbox_email
-                agent.mailbox_connected = True
-                agent.status = "running"
         connection.email = mailbox_email
         await session.commit()
-    return RedirectResponse(f"{settings.google_frontend_url}/dashboard/settings?google=connected")
+    return RedirectResponse(f"{settings.google_frontend_url}/dashboard/integrations?google=connected")
+
+
+@router.get("/outlook/authorize")
+async def outlook_authorize(user: User = Depends(get_current_user)) -> dict[str, str]:
+    if not settings.microsoft_client_id or not settings.microsoft_client_secret:
+        raise HTTPException(status_code=503, detail="Microsoft OAuth is not configured")
+    state = create_state(user.id, "outlook")
+    params = urllib.parse.urlencode({
+        "client_id": settings.microsoft_client_id,
+        "response_type": "code",
+        "redirect_uri": settings.microsoft_redirect_uri,
+        "response_mode": "query",
+        "scope": "openid profile email offline_access Mail.Read Mail.Send Calendars.ReadWrite",
+        "state": state,
+    })
+    return {"authorization_url": f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?{params}"}
+
+
+@router.get("/outlook/callback")
+async def outlook_callback(request: Request) -> RedirectResponse:
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing Microsoft OAuth callback data")
+    try:
+        payload = jwt.decode(state, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        if payload.get("purpose") != "oauth" or payload.get("provider") != "outlook":
+            raise JWTError
+        user_id = uuid.UUID(payload["sub"])
+    except (JWTError, KeyError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid or expired Microsoft OAuth state")
+    async with httpx.AsyncClient(timeout=20) as client:
+        token_response = await client.post("https://login.microsoftonline.com/common/oauth2/v2.0/token", data={
+            "client_id": settings.microsoft_client_id,
+            "client_secret": settings.microsoft_client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": settings.microsoft_redirect_uri,
+        })
+        if token_response.is_error:
+            raise HTTPException(status_code=502, detail="Microsoft OAuth token exchange failed")
+        token = token_response.json()
+        profile_response = await client.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {token['access_token']}"},
+        )
+        profile = profile_response.json() if not profile_response.is_error else {}
+    async with SessionFactory() as session:
+        connection = await session.scalar(select(OutlookConnection).where(OutlookConnection.user_id == user_id))
+        email = profile.get("mail") or profile.get("userPrincipalName")
+        if not connection:
+            session.add(OutlookConnection(user_id=user_id, email=email, token_json=encrypt_token(json.dumps(token))))
+        else:
+            connection.email = email
+            connection.token_json = encrypt_token(json.dumps(token))
+        await session.commit()
+    return RedirectResponse(f"{settings.google_frontend_url}/dashboard/integrations?outlook=connected")
+
+
+@router.get("/outlook/status")
+async def outlook_status(session: DbSession, user: User = Depends(get_current_user)) -> dict[str, bool]:
+    connected = await session.scalar(select(OutlookConnection.id).where(OutlookConnection.user_id == user.id))
+    return {"connected": connected is not None}
+
+
+@router.delete("/outlook")
+async def disconnect_outlook(session: DbSession, user: User = Depends(get_current_user)) -> dict[str, bool]:
+    connection = await session.scalar(select(OutlookConnection).where(OutlookConnection.user_id == user.id))
+    if connection:
+        await session.delete(connection)
+        await session.commit()
+    return {"connected": False}
 
 
 @router.get("/google/status")

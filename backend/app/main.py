@@ -12,7 +12,7 @@ from app.db.database import engine
 from app.db.base import Base
 from app.models.company import Company
 from app.models.user import User
-from app.models import company, user, agent, google_connection, email_message  # noqa: F401 - registers models
+from app.models import company, user, google_connection, email_message, outlook_connection  # noqa: F401 - registers models
 from app.services.mail_worker import inbox_worker
 
 
@@ -24,12 +24,6 @@ async def lifespan(_: FastAPI):
         await connection.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(30) "
             "NOT NULL DEFAULT 'recruiter'"
-        ))
-        await connection.execute(text(
-            "ALTER TABLE agents ADD COLUMN IF NOT EXISTS mailbox_email VARCHAR(255)"
-        ))
-        await connection.execute(text(
-            "ALTER TABLE agents ADD COLUMN IF NOT EXISTS mailbox_connected BOOLEAN NOT NULL DEFAULT FALSE"
         ))
     from app.db.database import SessionFactory
     async with SessionFactory() as session:

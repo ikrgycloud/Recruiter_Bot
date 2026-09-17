@@ -1,6 +1,6 @@
 # Recruiter Automation Backend
 
-FastAPI backend for company registration, authentication, agent heartbeats, and future recruiting workflows.
+FastAPI backend for company registration, authentication, user-owned provider integrations, and recruiting workflows.
 
 ## Run locally
 
