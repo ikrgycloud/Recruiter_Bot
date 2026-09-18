@@ -120,6 +120,11 @@ async def outlook_authorize(user: User = Depends(get_current_user)) -> dict[str,
 
 @router.get("/outlook/callback")
 async def outlook_callback(request: Request) -> RedirectResponse:
+    error = request.query_params.get("error")
+    if error:
+        reason = request.query_params.get("error_description", error)
+        target = f"{settings.google_frontend_url}/dashboard/integrations?outlook=error&reason={urllib.parse.quote(reason)}"
+        return RedirectResponse(target)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     if not code or not state:
@@ -140,7 +145,12 @@ async def outlook_callback(request: Request) -> RedirectResponse:
             "redirect_uri": settings.microsoft_redirect_uri,
         })
         if token_response.is_error:
-            raise HTTPException(status_code=502, detail="Microsoft OAuth token exchange failed")
+            try:
+                token_error = token_response.json()
+            except ValueError:
+                token_error = {}
+            detail = token_error.get("error_description") or token_error.get("error") or "Microsoft OAuth token exchange failed"
+            raise HTTPException(status_code=502, detail=detail)
         token = token_response.json()
         profile_response = await client.get(
             "https://graph.microsoft.com/v1.0/me",
