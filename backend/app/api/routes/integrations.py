@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse
 import httpx
 from google_auth_oauthlib.flow import Flow
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.dependencies import DbSession, get_current_user
 from app.core.config import settings
@@ -199,6 +199,17 @@ async def disconnect_google(session: DbSession, user: User = Depends(get_current
     return {"connected": False}
 
 
+@router.get("/google/gmail/status")
+async def gmail_status(session: DbSession, user: User = Depends(get_current_user)) -> dict[str, Any]:
+    connection = await session.scalar(select(GoogleConnection).where(GoogleConnection.user_id == user.id))
+    message_count = await session.scalar(select(func.count(EmailMessage.id)).where(EmailMessage.user_id == user.id))
+    return {
+        "connected": connection is not None,
+        "email": connection.email if connection else None,
+        "message_count": message_count or 0,
+    }
+
+
 async def _connection(session, user: User) -> GoogleConnection:
     connection = await session.scalar(select(GoogleConnection).where(GoogleConnection.user_id == user.id))
     if not connection:
@@ -215,10 +226,13 @@ async def sync_gmail(max_results: int = 25, session: DbSession = None,
         await session.commit()
     message_ids = await run_sync(list_message_ids, credentials, min(max_results, 100))
     saved: list[dict[str, Any]] = []
+    new_count = 0
+    existing_count = 0
     for message_id in message_ids:
         exists = await session.scalar(select(EmailMessage).where(
             EmailMessage.user_id == user.id, EmailMessage.provider_message_id == message_id))
         if exists:
+            existing_count += 1
             saved.append({"id": str(exists.id), "classification": exists.classification})
             continue
         message = await run_sync(read_message, credentials, message_id)
@@ -226,9 +240,10 @@ async def sync_gmail(max_results: int = 25, session: DbSession = None,
                               classification=classify_message(message["subject"] or "", message["body_preview"] or ""))
         session.add(record)
         await session.flush()
+        new_count += 1
         saved.append({"id": str(record.id), "provider_message_id": message_id, "classification": record.classification})
     await session.commit()
-    return {"synced": len(saved), "messages": saved}
+    return {"synced": len(saved), "new": new_count, "existing": existing_count, "messages": saved}
 
 
 @router.get("/google/gmail/messages")

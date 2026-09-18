@@ -17,6 +17,7 @@ RESCHEDULE_TERMS = (
     "different time", "different date", "cannot attend", "another slot", "postpone",
     "move the interview", "availability",
 )
+MAX_BODY_PREVIEW_LENGTH = 1000
 
 
 def credentials_from_connection(connection: GoogleConnection) -> tuple[Credentials, bool]:
@@ -53,7 +54,7 @@ def read_message(credentials: Credentials, message_id: str) -> dict[str, Any]:
     return {
         "provider_message_id": message["id"], "thread_id": message.get("threadId"),
         "sender": _header(headers, "From"), "subject": _header(headers, "Subject"),
-        "body_preview": decoded[:5000],
+        "body_preview": decoded[:MAX_BODY_PREVIEW_LENGTH],
         "received_at": datetime.fromtimestamp(int(message.get("internalDate", "0")) / 1000, timezone.utc),
     }
 
