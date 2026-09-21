@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,7 +12,7 @@ from app.db.database import engine
 from app.db.base import Base
 from app.models.company import Company
 from app.models.user import User
-from app.models import company, user, google_connection, email_message, outlook_connection  # noqa: F401 - registers models
+from app.models import company, user, google_connection, email_message, outlook_connection, mailbox_sync, automation_preference  # noqa: F401 - registers models
 
 
 @asynccontextmanager
@@ -37,8 +38,16 @@ async def lifespan(_: FastAPI):
         elif admin.role != "admin":
             admin.role = "admin"
             await session.commit()
-    yield
-    await engine.dispose()
+
+    from app.services.mail_worker import inbox_worker
+    stop_worker = asyncio.Event()
+    worker_task = asyncio.create_task(inbox_worker(stop_worker, settings.google_sync_interval_seconds))
+    try:
+        yield
+    finally:
+        stop_worker.set()
+        await worker_task
+        await engine.dispose()
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
