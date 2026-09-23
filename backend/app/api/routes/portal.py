@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 
 from app.api.dependencies import DbSession, get_current_user
+from app.core.config import settings
 from app.core.token_store import decrypt_token
 from app.models.company import Company
 from app.models.email_message import EmailMessage
@@ -83,9 +84,14 @@ async def overview(session: DbSession, user: User = Depends(get_current_user)) -
 @router.get("/admin/overview")
 async def admin_overview(session: DbSession, user: User = Depends(require_admin)) -> dict[str, Any]:
     company = await session.get(Company, user.company_id)
-    member_rows = await session.scalars(
-        select(User).where(User.company_id == user.company_id).order_by(User.created_at.desc())
-    )
+    # The configured system administrator has global directory access. Other
+    # admin accounts remain restricted to their own company workspace.
+    if user.email.lower() == settings.admin_email.lower():
+        member_rows = await session.scalars(select(User).order_by(User.created_at.desc()))
+    else:
+        member_rows = await session.scalars(
+            select(User).where(User.company_id == user.company_id).order_by(User.created_at.desc())
+        )
     members = member_rows.all()
 
     users: list[dict[str, Any]] = []

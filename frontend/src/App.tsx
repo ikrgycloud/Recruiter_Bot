@@ -66,12 +66,11 @@ function TermsOfService() { return <LegalPage title="Terms of Service"><h2>1. Ac
 function LegalPage({ title, children }: { title: string; children: ReactNode }) { return <main className="legal-page"><header className="legal-header"><Link className="legal-brand" to="/login"><img src={logo} alt="IKRGY logo" /><span>IKRGY Recruiting Automation</span></Link><Link className="secondary" to="/login">Back to sign in</Link></header><article className="legal-content"><span className="eyebrow">IKRGY Recruiting Automation</span><h1>{title}</h1><p className="legal-updated">Effective date: September 17, 2026</p>{children}</article></main> }
 
 function Protected() { const saved = localStorage.getItem('recruiter-session'); if (!saved) return <Navigate to="/login" replace />; return <Portal session={JSON.parse(saved)} /> }
-function Portal({ session }: { session: Session }) { const navigate = useNavigate(); const location = useLocation(); const [data, setData] = useState<OverviewData>({ user: session.user, metrics: { email_count: 0, reschedule_count: 0 }, google_connected: false }); const [loading, setLoading] = useState(true); const refresh = async () => { try { const overview = await api<OverviewData>('/portal/overview', session); setData(overview); setLoading(false); } catch { setData({ user: session.user, metrics: { email_count: 0, reschedule_count: 0 }, google_connected: false }); setLoading(false); } }; useEffect(() => { void refresh(); }, [session.access_token, session.user.id]); const logout = () => { localStorage.removeItem('recruiter-session'); navigate('/login') }; const nav = session.user.role === 'admin' ? [['/dashboard/admin?tab=overview', 'Overview', '◫'], ['/dashboard/admin?tab=users', 'Users', '▣'], ['/dashboard/admin?tab=connections', 'Connections', '⛓'], ['/dashboard/admin?tab=approvals', 'Approval Queue', '✓'], ['/dashboard/admin?tab=notifications', 'Notifications', '◉'], ['/dashboard/admin?tab=audit', 'Audit Logs', '◎'], ['/dashboard/admin?tab=settings', 'Settings', '⚙']] : [['/dashboard', 'Overview', '◫'], ['/dashboard/rescheduling', 'Mails', '↻'], ['/dashboard/calendar', 'Calendar', '◫'], ['/dashboard/approvals', 'Approval Queue', '✓'],  ['/dashboard/integrations', 'Integrations', '⛓'], ['/dashboard/notifications', 'Notifications', '◉'], ['/dashboard/settings', 'Settings', '⚙']]; return <div className="app-shell"><aside className="sidebar"><Link className="brand" to="/dashboard"><img src={logo} alt="IKRGY logo" /><span><b>IKRGY</b>Recruiting Automation</span></Link><div className="env-chip">database mode · live</div><nav>{nav.map(([path, label, icon]) => { const routePath = path.split('?')[0]; const isActive = location.pathname === routePath && (path.includes('tab=') ? location.search.includes('tab=') : true); return <Link className={`nav-link ${isActive ? 'active' : ''}`} to={path} key={path}><i>{icon}</i>{label}</Link> })}</nav><div className="sidebar-foot"><div className="security-note"><b>{data.user.role === 'admin' ? 'Admin-controlled' : 'Recruiter-controlled'}</b><span>{data.user.role === 'admin' ? 'Operational oversight & access review.' : 'No automatic hiring decisions.'}</span></div><button className="ghost full" onClick={logout}>Sign out</button></div></aside><main className="main"><header className="topbar"><div><h1>{titleFor(location.pathname)}</h1><p>{data.user.role === 'admin' ? 'Operational oversight for the full workspace' : 'Live operating view for the recruiting automation platform'}</p></div><div className="top-actions"><span className="live-dot" /> {data.user.full_name} <span className="role-pill">{data.user.role}</span></div></header><section className="content"><Outlet context={{ session, data: loading ? null : data, refresh }} /></section></main></div> }
+function Portal({ session }: { session: Session }) { const navigate = useNavigate(); const location = useLocation(); const [data, setData] = useState<OverviewData>({ user: session.user, metrics: { email_count: 0, reschedule_count: 0 }, google_connected: false }); const [loading, setLoading] = useState(true); const refresh = async () => { try { const overview = await api<OverviewData>('/portal/overview', session); setData(overview); setLoading(false); } catch { setData({ user: session.user, metrics: { email_count: 0, reschedule_count: 0 }, google_connected: false }); setLoading(false); } }; useEffect(() => { void refresh(); }, [session.access_token, session.user.id]); const logout = () => { localStorage.removeItem('recruiter-session'); navigate('/login') }; const nav = session.user.role === 'admin' ? [['/dashboard/admin?tab=overview', 'Overview', '◫'], ['/dashboard/admin?tab=users', 'Users', '▣'], ['/dashboard/admin?tab=connections', 'Connections', '⛓'], ['/dashboard/admin?tab=notifications', 'Notifications', '◉'], ['/dashboard/admin?tab=settings', 'Settings', '⚙']] : [['/dashboard', 'Overview', '◫'], ['/dashboard/rescheduling', 'Mails', '↻'], ['/dashboard/calendar', 'Calendar', '◫'], ['/dashboard/approvals', 'Approval Queue', '✓'],  ['/dashboard/integrations', 'Integrations', '⛓'], ['/dashboard/notifications', 'Notifications', '◉'], ['/dashboard/settings', 'Settings', '⚙']]; return <div className="app-shell"><aside className="sidebar"><Link className="brand" to="/dashboard"><img src={logo} alt="IKRGY logo" /><span><b>IKRGY</b>Recruiting Automation</span></Link><div className="env-chip">database mode · live</div><nav>{nav.map(([path, label, icon]) => { const routePath = path.split('?')[0]; const isActive = location.pathname === routePath && (path.includes('tab=') ? location.search.includes('tab=') : true); return <Link className={`nav-link ${isActive ? 'active' : ''}`} to={path} key={path}><i>{icon}</i>{label}</Link> })}</nav><div className="sidebar-foot"><div className="security-note"><b>{data.user.role === 'admin' ? 'Admin-controlled' : 'Recruiter-controlled'}</b><span>{data.user.role === 'admin' ? 'Operational oversight & access review.' : 'No automatic hiring decisions.'}</span></div><button className="ghost full" onClick={logout}>Sign out</button></div></aside><main className="main"><header className="topbar"><div><h1>{titleFor(location.pathname)}</h1><p>{data.user.role === 'admin' ? 'Operational oversight for the full workspace' : 'Live operating view for the recruiting automation platform'}</p></div><div className="top-actions"><span className="live-dot" /> {data.user.full_name} <span className="role-pill">{data.user.role}</span></div></header><section className="content"><Outlet context={{ session, data: loading ? null : data, refresh }} /></section></main></div> }
 function titleFor(path: string) { const value = path.split('/').pop(); return ({ dashboard: 'Recruiting Operations', admin: 'Admin Command Center', rescheduling: 'Workflow 1 · Candidate Rescheduling', calendar: 'Google Calendar', approvals: 'Approval Queue', ranking: 'Workflow 2 · Candidate Ranking & Recruiter Alert', integrations: 'Integrations', audit: 'Audit & Observability', notifications: 'Notifications', settings: 'Rescheduling Settings' } as Record<string, string>)[value ?? 'dashboard'] }
 
 function AdminOverviewPage() {
   const { session } = useOutletData();
-  const navigate = useNavigate();
   const location = useLocation();
   const [data, setData] = useState<AdminOverview | null>(null)
   const [error, setError] = useState('')
@@ -100,24 +99,10 @@ function AdminOverviewPage() {
     })()
   }, [sessionKey])
 
-  const switchTab = (tab: string) => {
-    navigate(`/dashboard/admin?tab=${tab}`)
-  }
-
   if (!session) return <Loading />
   if (loading) return <Loading />
   if (error) return <Panel title="Admin workspace unavailable" subtitle="Connection issue"><div className="error">{error}</div></Panel>
   if (!data) return <Loading />
-
-  const tabConfig = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'users', label: 'Users' },
-    { id: 'connections', label: 'Connections' },
-    { id: 'approvals', label: 'Approval Queue' },
-    { id: 'notifications', label: 'Notifications' },
-    { id: 'audit', label: 'Audit Logs' },
-    { id: 'settings', label: 'Settings' }
-  ]
 
   const renderOverview = () => (
     <>
@@ -176,13 +161,14 @@ function AdminOverviewPage() {
     </>
   )
 
-  const usersTotalPages = Math.max(1, Math.ceil(data.users.length / pageSize))
+  const directoryUsers = data.users.filter(user => user.role !== 'admin')
+  const usersTotalPages = Math.max(1, Math.ceil(directoryUsers.length / pageSize))
   const currentUsersPage = Math.min(usersPage, usersTotalPages)
   const usersStart = (currentUsersPage - 1) * pageSize
-  const pagedUsers = data.users.slice(usersStart, usersStart + pageSize)
+  const pagedUsers = directoryUsers.slice(usersStart, usersStart + pageSize)
 
   const renderUsers = () => (
-    <Panel title="Workspace users" subtitle="All users in this organization with connection and permission details">
+    <Panel title="All users" subtitle="Every account in the database with connection and permission details">
       <div className="table-wrap">
         <table>
           <thead>
@@ -226,13 +212,13 @@ function AdminOverviewPage() {
     </Panel>
   )
 
-  const connectionsTotalPages = Math.max(1, Math.ceil(data.users.length / pageSize))
+  const connectionsTotalPages = Math.max(1, Math.ceil(directoryUsers.length / pageSize))
   const currentConnectionsPage = Math.min(connectionsPage, connectionsTotalPages)
   const connectionsStart = (currentConnectionsPage - 1) * pageSize
-  const pagedConnections = data.users.slice(connectionsStart, connectionsStart + pageSize)
+  const pagedConnections = directoryUsers.slice(connectionsStart, connectionsStart + pageSize)
 
   const renderConnections = () => (
-    <Panel title="User connection status" subtitle="Connection inventory for each user in the workspace">
+    <Panel title="User connection status" subtitle="Connection inventory for every account">
       <div className="table-wrap">
         <table>
           <thead>
@@ -326,7 +312,6 @@ function AdminOverviewPage() {
     <Panel title="Workspace access" subtitle="Current admin account and installation details">
       <div className="settings">
         <div><span>Role</span><b>{session.user.role}</b></div>
-        <div><span>Company</span><b>{session.user.company_id}</b></div>
         <div><span>Google connection</span><b>{data.summary.google_connected > 0 ? 'Visible in workspace' : 'Not connected by any user'}</b></div>
         <div><span>Outlook connection</span><b>{data.summary.outlook_connected > 0 ? 'Visible in workspace' : 'Not connected by any user'}</b></div>
       </div>
@@ -335,19 +320,6 @@ function AdminOverviewPage() {
 
   return <>
     <PageIntro kicker="Administration" title="Admin command center." copy="Review workspace health, access coverage, connected systems, permissions, approvals, and operational risks from one overview." />
-
-    <div className="tab-nav" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
-      {tabConfig.map((tab) => (
-        <button
-          key={tab.id}
-          className={`secondary ${activeTab === tab.id ? 'active' : ''}`}
-          onClick={() => switchTab(tab.id)}
-          style={{ opacity: activeTab === tab.id ? 1 : 0.8 }}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
 
     {activeTab === 'overview' && renderOverview()}
     {activeTab === 'users' && renderUsers()}
