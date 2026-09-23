@@ -327,6 +327,7 @@ async def build_reschedule_plan(
     requested_clock = requested_time(body) or (
         original_start.timetz().replace(tzinfo=None) if original_start else shift_start
     )
+    requested_clock_label = requested_clock.strftime("%H:%M")
     # On the requested date, start at the candidate's requested time. If that
     # time conflicts, only search later slots that day. Later working days start
     # at the shift opening. This avoids suggesting a time before the candidate
@@ -370,6 +371,7 @@ async def build_reschedule_plan(
                 "event_summary": event.get("summary", "Interview") if event else "Interview",
                 "duration_seconds": int(duration.total_seconds()),
                 "requested_date": desired_date.isoformat(), "candidate_requested_date": has_requested_date,
+                "candidate_requested_time": requested_clock_label,
                 "start": chosen.isoformat(),
                 "end": (chosen + duration).isoformat(), "timezone": timezone_name,
                 "availability_date": day.isoformat(), "used_next_available_date": day != desired_date,
@@ -423,6 +425,7 @@ async def execute_reschedule_plan(session, message: EmailMessage, credentials, p
             f"Interview: {title}\n"
             f"Date: {readable_date}\n"
             f"Time: {readable_start} to {readable_end} {timezone_label}\n"
+            + (f"Requested time: {plan['candidate_requested_time']} {timezone_label}\n" if plan.get("candidate_requested_time") else "")
             + (f"Duration: {duration_label}\n" if duration_label else "")
             + "\nIf this time does not work for you, reply to this email and let us know.\n\n"
               "Best regards,\nRecruiting Team"
@@ -438,6 +441,7 @@ async def execute_reschedule_plan(session, message: EmailMessage, credentials, p
             f"<tr><td><strong>Date</strong></td><td>{escape(readable_date)}</td></tr>"
             f"<tr><td><strong>Time</strong></td><td>{escape(readable_start)} to {escape(readable_end)} "
             f"{escape(timezone_label)}</td></tr>"
+            + (f"<tr><td><strong>Requested time</strong></td><td>{escape(plan['candidate_requested_time'])} {escape(timezone_label)}</td></tr>" if plan.get("candidate_requested_time") else "")
             + (f"<tr><td><strong>Duration</strong></td><td>{escape(duration_label)}</td></tr>" if duration_label else "")
             + "</table><p>If this time does not work for you, reply to this email and let us know.</p>"
               "<p>Best regards,<br>Recruiting Team</p>"

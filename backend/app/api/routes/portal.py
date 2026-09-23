@@ -211,3 +211,22 @@ async def admin_overview(session: DbSession, user: User = Depends(require_admin)
         "alerts": alerts[:8],
         "approvals": approvals[:10],
     }
+
+
+@router.get("/notifications")
+async def notifications(session: DbSession, user: User = Depends(get_current_user)) -> list[dict[str, Any]]:
+    """Return accepted reschedule approvals for the recruiter workspace."""
+    records = await session.scalars(select(EmailMessage).where(
+        EmailMessage.user_id == user.id,
+        EmailMessage.classification == "reschedule_request",
+        EmailMessage.processed.is_(True),
+    ).order_by(EmailMessage.created_at.desc()).limit(50))
+    return [{
+        "id": str(message.id),
+        "type": "reschedule_accepted",
+        "title": "Interview reschedule accepted",
+        "sender": message.sender,
+        "subject": message.subject or "Interview reschedule request",
+        "received_at": message.received_at.isoformat() if message.received_at else None,
+        "recorded_at": message.created_at.isoformat() if message.created_at else None,
+    } for message in records.all()]
