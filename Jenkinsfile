@@ -25,7 +25,7 @@ pipeline {
         // ==============================
         // APPLICATION EC2
         // ==============================
-        APP_SERVER = "ubuntu@16.16.216.155"
+        APP_SERVER = "ubuntu@13.63.138.123"
         APP_DIR = "/opt/recruiter"
 
         // ==============================
@@ -424,10 +424,10 @@ pipeline {
             ${ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}
 
             Backend:
-            http://16.16.216.155:8011/docs
+            http://13.63.138.123:8011/docs
 
             Frontend:
-            http://16.16.216.155:86/
+            http://13.63.138.123:86/
 
             =======================================
             """
