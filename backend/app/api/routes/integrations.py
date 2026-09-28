@@ -1,4 +1,4 @@
-import json
+﻿import json
 import logging
 import urllib.parse
 import uuid
@@ -26,6 +26,9 @@ from app.services.google_workspace import (classify_message, credentials_from_co
                                            freebusy, list_message_ids, move_event,
                                            primary_calendar_timezone, read_message, run_sync,
                                            send_reply, profile_email)
+from app.services.outlook_workspace import (credentials_from_connection as outlook_credentials_from_connection,
+                                            read_message as outlook_read_message, list_message_ids as outlook_list_message_ids,
+                                            send_message as outlook_send_message)
 from app.services.rescheduling import (build_reschedule_plan, execute_reschedule_plan,
                                        slot_is_available, slot_matches_work_schedule)
 from app.services.mail_worker import clear_invalid_google_user
@@ -255,6 +258,19 @@ async def _google_credentials(session, user: User) -> tuple[Any, bool]:
     return credentials, refreshed
 
 
+async def _outlook_credentials(session, user: User) -> tuple[Any, bool]:
+    connection = await session.scalar(select(OutlookConnection).where(OutlookConnection.user_id == user.id))
+    if not connection:
+        raise HTTPException(status_code=409, detail="Connect Outlook before using Outlook mail")
+    try:
+        credentials, refreshed = await run_sync(outlook_credentials_from_connection, connection)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    if refreshed:
+        await session.commit()
+    return credentials, refreshed
+
+
 async def _auto_suggestions_enabled(session, user: User) -> bool:
     preference = await session.get(AutomationPreference, user.id)
     return (preference.automatic_rescheduling_enabled if preference
@@ -345,9 +361,9 @@ async def gmail_messages(page: int = 1, page_size: int = 25, session: DbSession 
         page = 1
     if page_size < 1:
         page_size = 25
-    total = await session.scalar(select(func.count(EmailMessage.id)).where(EmailMessage.user_id == user.id))
+    total = await session.scalar(select(func.count(EmailMessage.id)).where(EmailMessage.user_id == user.id, EmailMessage.provider == "google"))
     offset = (page - 1) * page_size
-    records = await session.scalars(select(EmailMessage).where(EmailMessage.user_id == user.id)
+    records = await session.scalars(select(EmailMessage).where(EmailMessage.user_id == user.id, EmailMessage.provider == "google")
                                     .order_by(EmailMessage.received_at.desc()).offset(offset).limit(page_size))
     records = list(records)
     # Existing database rows may have been classified with older rules. Update
@@ -399,6 +415,73 @@ async def gmail_reply(payload: dict[str, str], session: DbSession = None,
         raise HTTPException(status_code=422, detail="to, subject, and body are required")
     sent = await run_sync(send_reply, credentials, payload["to"], payload["subject"], payload["body"], payload.get("thread_id"))
     return {"provider_message_id": sent.get("id", "")}
+
+
+@router.post("/outlook/mail/sync")
+async def sync_outlook(max_results: int = 50, session: DbSession = None,
+                        user: User = Depends(get_current_user)) -> dict[str, Any]:
+    credentials, _ = await _outlook_credentials(session, user)
+    max_results = max(1, min(max_results, 100))
+    message_ids = await run_sync(outlook_list_message_ids, credentials, max_results)
+    new_count = 0
+    for message_id in message_ids:
+        exists = await session.scalar(select(EmailMessage).where(
+            EmailMessage.user_id == user.id,
+            EmailMessage.provider == "outlook",
+            EmailMessage.provider_message_id == message_id,
+        ))
+        if exists:
+            continue
+        message = await run_sync(outlook_read_message, credentials, message_id)
+        session.add(EmailMessage(user_id=user.id, provider="outlook", **message,
+                                 classification=classify_message(message["subject"] or "", message["body_preview"] or "")))
+        new_count += 1
+    await session.commit()
+    return {"new": new_count, "scanned": len(message_ids)}
+@router.get("/outlook/mail/messages")
+async def outlook_messages(page: int = 1, page_size: int = 25, session: DbSession = None,
+                           user: User = Depends(get_current_user)) -> dict[str, Any]:
+    page = max(1, page); page_size = max(1, min(page_size, 100))
+    total = await session.scalar(select(func.count(EmailMessage.id)).where(
+        EmailMessage.user_id == user.id, EmailMessage.provider == "outlook")) or 0
+    records = list(await session.scalars(select(EmailMessage).where(
+        EmailMessage.user_id == user.id, EmailMessage.provider == "outlook"
+    ).order_by(EmailMessage.received_at.desc()).offset((page - 1) * page_size).limit(page_size)))
+    return {"page": page, "page_size": page_size, "total": total,
+            "pages": max(1, (total + page_size - 1) // page_size),
+            "items": [{"id": str(item.id), "provider_message_id": item.provider_message_id,
+                       "sender": item.sender, "subject": item.subject, "body_preview": item.body_preview,
+                       "received_at": item.received_at, "classification": item.classification,
+                       "processed": item.processed} for item in records]}
+
+
+@router.get("/outlook/mail/messages/{message_id}/body")
+async def outlook_message_body(message_id: uuid.UUID, session: DbSession = None,
+                               user: User = Depends(get_current_user)) -> dict[str, Any]:
+    record = await session.scalar(select(EmailMessage).where(
+        EmailMessage.id == message_id, EmailMessage.user_id == user.id, EmailMessage.provider == "outlook"))
+    if not record:
+        raise HTTPException(status_code=404, detail="Outlook message not found")
+    token, _ = await _outlook_credentials(session, user)
+    try:
+        refreshed = await run_sync(outlook_read_message, token, record.provider_message_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Unable to fetch the complete email from Outlook") from exc
+    for key in ("sender", "subject", "body_preview", "thread_id", "received_at"):
+        setattr(record, key, refreshed[key])
+    record.classification = classify_message(record.subject or "", record.body_preview or "")
+    await session.commit()
+    return {"body": record.body_preview or "", "classification": record.classification}
+
+
+@router.post("/outlook/mail/reply")
+async def outlook_reply(payload: dict[str, str], session: DbSession = None,
+                        user: User = Depends(get_current_user)) -> dict[str, str]:
+    if not {"to", "subject", "body"}.issubset(payload):
+        raise HTTPException(status_code=422, detail="to, subject, and body are required")
+    token, _ = await _outlook_credentials(session, user)
+    await run_sync(outlook_send_message, token, payload["to"], payload["subject"], payload["body"])
+    return {"status": "sent"}
 
 
 @router.get("/google/calendar/availability")
@@ -459,14 +542,38 @@ async def calendar_reschedule(payload: dict[str, str], session: DbSession = None
     if busy:
         raise HTTPException(status_code=409, detail={"message": "Requested time is busy", "busy": busy})
     event = await run_sync(move_event, credentials, payload["event_id"], start, end, payload.get("timezone", "UTC"))
+    notification_sent = False
+    notification_error = None
+    conference_entries = (event.get("conferenceData") or {}).get("entryPoints") or []
+    meeting_link = event.get("hangoutLink") or next(
+        (entry.get("uri") for entry in conference_entries if entry.get("entryPointType") == "video" and entry.get("uri")),
+        None,
+    ) or event.get("htmlLink")
     if payload.get("email_message_id"):
         message = await session.get(EmailMessage, uuid.UUID(payload["email_message_id"]))
-        if message and message.sender:
-            await run_sync(send_reply, credentials, message.sender, message.subject or "Interview update",
-                           f"Your interview has been rescheduled to {start.isoformat()}.", message.thread_id)
+        if message:
             message.processed = True
+            message.workflow_status = "rescheduled"
+            message.notification_sent = False
+            message.failure_reason = None
+            message.calendar_event_id = event.get("id", payload["event_id"])
+            message.scheduled_start = start
+            message.scheduled_end = end
+            if message.sender:
+                try:
+                    await run_sync(send_reply, credentials, message.sender, message.subject or "Interview update",
+                                   f"Your interview has been rescheduled to {start.isoformat()}.\n\nMeeting link: {meeting_link}", message.thread_id)
+                    message.notification_sent = True
+                    message.workflow_status = "completed"
+                    notification_sent = True
+                except Exception:
+                    notification_error = "The calendar was updated, but the confirmation email could not be sent."
+                    message.workflow_status = "notification_failed"
+                    message.failure_reason = notification_error
             await session.commit()
-    return {"event_id": event.get("id"), "status": "rescheduled", "start": start, "end": end}
+    return {"event_id": event.get("id"), "status": "rescheduled", "start": start, "end": end,
+            "calendar_updated": True, "notification_sent": notification_sent,
+            "notification_error": notification_error, "meeting_link": meeting_link}
 
 
 @router.get("/google/automation/pending")
@@ -597,6 +704,9 @@ async def update_automation_settings(payload: dict[str, Any], session: DbSession
         preference = AutomationPreference(
             user_id=user.id,
             automatic_rescheduling_enabled=settings.automation_auto_reschedule,
+            working_days=[0, 1, 2, 3, 4],
+            shift_start=time(9),
+            shift_end=time(17),
         )
         session.add(preference)
     if "automatic_rescheduling_enabled" in payload:
@@ -667,3 +777,6 @@ async def process_reschedule_request(message_id: uuid.UUID, payload: dict[str, A
     if bool(payload.get("execute", False)):
         return await execute_reschedule_plan(session, message, credentials, plan)
     return {**plan, "status": "needs_approval"}
+
+
+

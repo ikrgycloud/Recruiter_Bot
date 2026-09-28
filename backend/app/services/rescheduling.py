@@ -390,6 +390,12 @@ async def execute_reschedule_plan(session, message: EmailMessage, credentials, p
         datetime.fromisoformat(plan["end"]), plan["timezone"],
     )
     message.processed = True
+    message.workflow_status = "rescheduled"
+    message.notification_sent = False
+    message.failure_reason = None
+    message.calendar_event_id = event.get("id", plan["event_id"])
+    message.scheduled_start = datetime.fromisoformat(plan["start"])
+    message.scheduled_end = datetime.fromisoformat(plan["end"])
     await session.commit()
     plan = {
         **plan,
@@ -398,6 +404,12 @@ async def execute_reschedule_plan(session, message: EmailMessage, credentials, p
         "calendar_updated": True,
         "google_calendar_event_url": event.get("htmlLink"),
     }
+    conference_entries = (event.get("conferenceData") or {}).get("entryPoints") or []
+    meeting_link = event.get("hangoutLink") or next(
+        (entry.get("uri") for entry in conference_entries if entry.get("entryPointType") == "video" and entry.get("uri")),
+        None,
+    )
+    plan["meeting_link"] = meeting_link or event.get("htmlLink")
     if plan.get("candidate_email"):
         try:
             event_zone = ZoneInfo(canonical_timezone_name(plan.get("timezone")))
@@ -427,6 +439,7 @@ async def execute_reschedule_plan(session, message: EmailMessage, credentials, p
             f"Time: {readable_start} to {readable_end} {timezone_label}\n"
             + (f"Requested time: {plan['candidate_requested_time']} {timezone_label}\n" if plan.get("candidate_requested_time") else "")
             + (f"Duration: {duration_label}\n" if duration_label else "")
+            + (f"Meeting link: {plan['meeting_link']}\n" if plan.get("meeting_link") else "")
             + "\nIf this time does not work for you, reply to this email and let us know.\n\n"
               "Best regards,\nRecruiting Team"
         )
@@ -443,6 +456,7 @@ async def execute_reschedule_plan(session, message: EmailMessage, credentials, p
             f"{escape(timezone_label)}</td></tr>"
             + (f"<tr><td><strong>Requested time</strong></td><td>{escape(plan['candidate_requested_time'])} {escape(timezone_label)}</td></tr>" if plan.get("candidate_requested_time") else "")
             + (f"<tr><td><strong>Duration</strong></td><td>{escape(duration_label)}</td></tr>" if duration_label else "")
+            + (f"<tr><td><strong>Meeting link</strong></td><td><a href=\"{escape(plan['meeting_link'])}\">Join meeting</a></td></tr>" if plan.get("meeting_link") else "")
             + "</table><p>If this time does not work for you, reply to this email and let us know.</p>"
               "<p>Best regards,<br>Recruiting Team</p>"
         )
@@ -452,10 +466,22 @@ async def execute_reschedule_plan(session, message: EmailMessage, credentials, p
                 plain_body, message.thread_id, html_body, message.provider_message_id,
             )
             plan["candidate_notified"] = True
+            message.notification_sent = True
+            message.workflow_status = "completed"
+            message.failure_reason = None
+            await session.commit()
         except Exception:
             logger.exception("Calendar event moved but the candidate confirmation could not be sent")
             plan["candidate_notified"] = False
             plan["notification_error"] = "The calendar was updated, but the confirmation email could not be sent. Check Gmail before retrying."
+            message.notification_sent = False
+            message.workflow_status = "notification_failed"
+            message.failure_reason = plan["notification_error"]
+            await session.commit()
+    else:
+        message.workflow_status = "completed"
+        message.notification_sent = False
+        await session.commit()
     return plan
 
 

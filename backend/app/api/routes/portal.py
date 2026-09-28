@@ -13,6 +13,7 @@ from app.models.google_connection import GoogleConnection
 from app.models.outlook_connection import OutlookConnection
 from app.models.user import User
 from app.services.google_workspace import credentials_from_connection, run_sync
+from app.services.outlook_workspace import credentials_from_connection as outlook_credentials_from_connection
 
 router = APIRouter()
 
@@ -235,4 +236,46 @@ async def notifications(session: DbSession, user: User = Depends(get_current_use
         "subject": message.subject or "Interview reschedule request",
         "received_at": message.received_at.isoformat() if message.received_at else None,
         "recorded_at": message.created_at.isoformat() if message.created_at else None,
+        "calendar_event_id": message.calendar_event_id,
+        "scheduled_start": message.scheduled_start.isoformat() if message.scheduled_start else None,
+        "scheduled_end": message.scheduled_end.isoformat() if message.scheduled_end else None,
+        "calendar_stored": bool(message.calendar_event_id and message.scheduled_start and message.scheduled_end),
     } for message in records.all()]
+
+
+@router.get("/alerts")
+async def alerts(session: DbSession, user: User = Depends(get_current_user)) -> list[dict[str, Any]]:
+    """Return only actionable mailbox and workflow failures for a recruiter."""
+    result: list[dict[str, Any]] = []
+    google = await session.scalar(select(GoogleConnection).where(GoogleConnection.user_id == user.id))
+    if google is None:
+        result.append({"id": "google-disconnected", "type": "sync", "severity": "warning",
+                       "title": "Google Mail is not connected", "message": "Reconnect Google to resume Gmail and Calendar workflows."})
+    else:
+        try:
+            await run_sync(credentials_from_connection, google)
+        except ValueError as exc:
+            result.append({"id": "google-token", "type": "sync", "severity": "error",
+                           "title": "Google mail sync is paused", "message": str(exc)})
+
+    outlook = await session.scalar(select(OutlookConnection).where(OutlookConnection.user_id == user.id))
+    if outlook is None:
+        result.append({"id": "outlook-disconnected", "type": "sync", "severity": "info",
+                       "title": "Outlook is not connected", "message": "Connect Outlook if this mailbox should be monitored."})
+    else:
+        try:
+            await run_sync(outlook_credentials_from_connection, outlook)
+        except ValueError as exc:
+            result.append({"id": "outlook-token", "type": "sync", "severity": "error",
+                           "title": "Outlook mail sync is paused", "message": str(exc)})
+
+    failures = await session.scalars(select(EmailMessage).where(
+        EmailMessage.user_id == user.id,
+        EmailMessage.workflow_status == "notification_failed",
+    ).order_by(EmailMessage.created_at.desc()).limit(25))
+    for message in failures.all():
+        result.append({"id": str(message.id), "type": "delivery", "severity": "error",
+                       "title": "Reschedule confirmation email failed",
+                       "message": message.failure_reason or f"The calendar changed, but the email for {message.subject or 'this request'} was not sent.",
+                       "subject": message.subject, "recorded_at": message.created_at.isoformat() if message.created_at else None})
+    return result

@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -7,8 +7,11 @@ from sqlalchemy import select
 from app.db.database import SessionFactory
 from app.models.email_message import EmailMessage
 from app.models.google_connection import GoogleConnection
+from app.models.outlook_connection import OutlookConnection
 from app.models.mailbox_sync import MailboxSync
 from app.services.google_workspace import classify_message, credentials_from_connection, list_message_ids, read_message, run_sync
+from app.services.outlook_workspace import credentials_from_connection as outlook_credentials_from_connection
+from app.services.outlook_workspace import list_message_ids as outlook_list_message_ids, read_message as outlook_read_message
 
 logger = logging.getLogger(__name__)
 _invalid_google_users: set[str] = set()
@@ -21,9 +24,34 @@ def clear_invalid_google_user(user_id) -> None:
 
 async def sync_connected_inboxes() -> None:
     async with SessionFactory() as session:
-        connections = (await session.scalars(select(GoogleConnection))).all()
-        for connection in connections:
+        # Sync Outlook first so a stale Google token cannot prevent a healthy
+        # Microsoft mailbox from being imported.
+        outlook_connections = (await session.scalars(select(OutlookConnection))).all()
+        for connection in outlook_connections:
             user_id = connection.user_id
+            try:
+                token, refreshed = await run_sync(outlook_credentials_from_connection, connection)
+                if refreshed:
+                    await session.commit()
+                known_ids = set((await session.scalars(select(EmailMessage.provider_message_id).where(
+                    EmailMessage.user_id == user_id, EmailMessage.provider == "outlook"
+                ))).all())
+                for message_id in await run_sync(outlook_list_message_ids, token, 50):
+                    if message_id in known_ids:
+                        continue
+                    message = await run_sync(outlook_read_message, token, message_id)
+                    session.add(EmailMessage(user_id=user_id, provider="outlook", **message,
+                                             classification=classify_message(message["subject"], message["body_preview"])))
+                await session.commit()
+            except ValueError as exc:
+                await session.rollback()
+                logger.warning("Outlook inbox sync paused for user %s: %s", user_id, exc)
+            except Exception:
+                await session.rollback()
+                logger.exception("Outlook inbox sync failed for user %s", user_id)
+        google_user_ids = (await session.scalars(select(GoogleConnection.user_id))).all()
+        for user_id in google_user_ids:
+            connection = await session.get(GoogleConnection, user_id)
             if str(user_id) in _invalid_google_users:
                 continue
             try:
@@ -48,6 +76,7 @@ async def sync_connected_inboxes() -> None:
                     message = await run_sync(read_message, credentials, message_id)
                     record = EmailMessage(
                         user_id=user_id,
+                        provider="google",
                         **message,
                         classification=classify_message(message["subject"] or "", message["body_preview"] or ""),
                     )
@@ -77,8 +106,15 @@ async def sync_connected_inboxes() -> None:
 async def inbox_worker(stop_event: asyncio.Event, interval_seconds: int) -> None:
     interval_seconds = max(30, interval_seconds)
     while not stop_event.is_set():
-        await sync_connected_inboxes()
+        try:
+            await sync_connected_inboxes()
+        except Exception:
+            logger.exception("Mailbox sync cycle failed")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except asyncio.TimeoutError:
             continue
+
+
+
+

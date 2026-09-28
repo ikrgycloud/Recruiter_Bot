@@ -60,9 +60,11 @@ def infer_reschedule_window(subject: str, body: str) -> tuple[datetime | None, d
 
 def credentials_from_connection(connection: GoogleConnection | str) -> tuple[Credentials, bool]:
     token_json = connection.token_json if hasattr(connection, "token_json") else connection
+    if not token_json:
+        raise ValueError("Google connection data is missing. Please reconnect Google.")
     try:
         credentials = Credentials.from_authorized_user_info(json.loads(decrypt_token(token_json)))
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("Google connection data is invalid. Please reconnect Google.") from exc
 
     refreshed = False

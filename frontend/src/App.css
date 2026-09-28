@@ -208,6 +208,22 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
   .landing-actions a { width: 100%; }
 }
 
+.provider-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+
+/* Use stable ASCII glyphs so navigation icons render on every browser/font. */
+.nav-link i { font-size: 0; }
+.nav-link i::before { font: 700 13px/1 Arial, sans-serif; }
+.nav-link:nth-child(1) i::before { content: '\25A1'; }
+.nav-link:nth-child(2) i::before { content: '\2709'; }
+.nav-link:nth-child(3) i::before { content: '\25A3'; }
+.nav-link:nth-child(4) i::before { content: '\2713'; }
+.nav-link:nth-child(5) i::before { content: '\25CF'; }
+.nav-link:nth-child(6) i::before { content: '\2699'; }
+.nav-link:nth-child(7) i::before { content: '\26A0'; }
+.nav-link:nth-child(8) i::before { content: '\2699'; }
+.success-toast { position: fixed; right: 24px; top: 24px; z-index: 20; display: flex; align-items: center; gap: 10px; max-width: min(420px, calc(100vw - 48px)); padding: 14px 18px; border: 1px solid rgba(60, 210, 150, .45); border-radius: 12px; background: #102b25; color: #d8fff0; box-shadow: 0 14px 34px rgba(0, 0, 0, .25); font-weight: 700; }
+.success-toast span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #3cd296; color: #092016; }
+
 /* Keep navigation visible while any dashboard page scrolls. */
 @media (min-width: 681px) {
   .app-shell { display: block; }
