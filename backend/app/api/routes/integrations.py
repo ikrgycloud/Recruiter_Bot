@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 import httpx
 from google_auth_oauthlib.flow import Flow
+from googleapiclient.errors import HttpError
 from jose import JWTError, jwt
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.api.dependencies import DbSession, get_current_user
 from app.core.config import settings
@@ -22,6 +23,7 @@ from app.models.user import User
 from app.models.email_message import EmailMessage
 from app.models.automation_preference import AutomationPreference
 from app.models.outlook_connection import OutlookConnection
+from app.models.mailbox_sync import MailboxSync
 from app.services.google_workspace import (classify_message, credentials_from_connection, find_events,
                                            freebusy, list_message_ids, move_event,
                                            primary_calendar_timezone, read_message, run_sync,
@@ -192,7 +194,9 @@ async def disconnect_outlook(session: DbSession, user: User = Depends(get_curren
     connection = await session.scalar(select(OutlookConnection).where(OutlookConnection.user_id == user.id))
     if connection:
         await session.delete(connection)
-        await session.commit()
+    await session.execute(delete(EmailMessage).where(
+        EmailMessage.user_id == user.id, EmailMessage.provider == "outlook"))
+    await session.commit()
     return {"connected": False}
 
 
@@ -215,7 +219,10 @@ async def disconnect_google(session: DbSession, user: User = Depends(get_current
     connection = await session.scalar(select(GoogleConnection).where(GoogleConnection.user_id == user.id))
     if connection:
         await session.delete(connection)
-        await session.commit()
+    await session.execute(delete(EmailMessage).where(
+        EmailMessage.user_id == user.id, EmailMessage.provider == "google"))
+    await session.execute(delete(MailboxSync).where(MailboxSync.user_id == user.id))
+    await session.commit()
     return {"connected": False}
 
 
@@ -288,7 +295,17 @@ async def _build_user_reschedule_plan(session, user: User, message: EmailMessage
     if message.provider_message_id:
         try:
             full_message = await run_sync(read_message, credentials, message.provider_message_id)
-        except Exception as exc:
+        except HttpError as exc:
+            if exc.resp is not None and exc.resp.status == 404:
+                message.processed = True
+                message.classification = "other"
+                message.workflow_status = "stale_provider_message"
+                message.failure_reason = "The original Gmail message is no longer available."
+                await session.commit()
+                return {"status": "ignored", "reason": "The original Gmail message is no longer available."}
+            logger.exception("Unable to refresh full Gmail content for message %s", message.id)
+            return {"status": "needs_review", "reason": "The complete email could not be read from Gmail. Retry syncing before approving."}
+        except Exception:
             logger.exception("Unable to refresh full Gmail content for message %s", message.id)
             return {"status": "needs_review", "reason": "The complete email could not be read from Gmail. Retry syncing before approving."}
         message.sender = full_message["sender"]
@@ -418,11 +435,11 @@ async def gmail_reply(payload: dict[str, str], session: DbSession = None,
 
 
 @router.post("/outlook/mail/sync")
-async def sync_outlook(max_results: int = 50, session: DbSession = None,
+async def sync_outlook(max_results: int = 0, session: DbSession = None,
                         user: User = Depends(get_current_user)) -> dict[str, Any]:
     credentials, _ = await _outlook_credentials(session, user)
-    max_results = max(1, min(max_results, 100))
-    message_ids = await run_sync(outlook_list_message_ids, credentials, max_results)
+    max_results = max(0, min(max_results, 10000))
+    message_ids = await run_sync(outlook_list_message_ids, credentials, max_results or None)
     new_count = 0
     for message_id in message_ids:
         exists = await session.scalar(select(EmailMessage).where(
@@ -601,8 +618,6 @@ async def pending_reschedule_requests(session: DbSession = None,
         if not suggest_automatically and plan.get("status") == "ready":
             plan = {**plan, "status": "needs_review",
                     "reason": "Automatic suggestions are off. Choose a date and time for recruiter review."}
-            plan.pop("start", None)
-            plan.pop("end", None)
         pending.append({
             "id": str(message.id),
             "sender": message.sender,

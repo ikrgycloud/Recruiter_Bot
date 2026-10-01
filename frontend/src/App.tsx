@@ -390,7 +390,7 @@ function ReschedulingPage() {
     setSyncing(true)
     setStatus('')
     try {
-      if (provider === 'outlook') { const result = await api<{ new: number; scanned: number }>('/integrations/outlook/mail/sync?max_results=50', session, { method: 'POST' }); await load(); setStatus(`Outlook sync complete: ${result.new} new message${result.new === 1 ? '' : 's'} imported.`); return }
+      if (provider === 'outlook') { const result = await api<{ new: number; scanned: number }>('/integrations/outlook/mail/sync?max_results=0', session, { method: 'POST' }); await load(); setStatus(`Outlook sync complete: ${result.new} new message${result.new === 1 ? '' : 's'} imported from ${result.scanned} mailbox messages.`); return }
       const result = await api<GmailSyncResponse>('/integrations/google/gmail/sync?max_results=25', session, { method: 'POST' })
       await load()
       setStatus(`Gmail sync complete: ${result.new} new message${result.new === 1 ? '' : 's'} imported.`)
@@ -579,8 +579,7 @@ function ApprovalsPage() {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notice, setNotice] = useState('')
   const [successToast, setSuccessToast] = useState('')
-  const [calendarEventUrl, setCalendarEventUrl] = useState('')
-  const [calendarEventDate, setCalendarEventDate] = useState('')
+  const [editMode, setEditMode] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
 
@@ -611,20 +610,19 @@ function ApprovalsPage() {
   const act = async (item: PendingReschedule, action: 'approve' | 'decline') => {
     if (!session) return
     setErrors(current => ({ ...current, [item.id]: '' }))
-    setCalendarEventUrl('')
-    setCalendarEventDate('')
     try {
       const options: RequestInit = { method: 'POST' }
       if (action === 'approve') {
         const payload: Record<string, string> = {}
-        if (item.status === 'ready' && item.start && item.end) {
+        const editingSuggestedSlot = Boolean(editMode[item.id])
+        if (item.status === 'ready' && !editingSuggestedSlot && item.start && item.end) {
           payload.start = item.start
           payload.end = item.end
         } else {
-          payload.date = dates[item.id] ?? item.requested_date ?? ''
+          payload.date = dates[item.id] ?? (item.start ? item.start.slice(0, 10) : item.requested_date ?? '')
           payload.time = times[item.id] ?? ''
         }
-        if (item.status !== 'ready' && (!payload.date || !payload.time)) {
+        if ((item.status !== 'ready' || editingSuggestedSlot) && (!payload.date || !payload.time)) {
           setErrors(current => ({ ...current, [item.id]: 'Choose a date and time to approve this request.' }))
           return
         }
@@ -632,8 +630,7 @@ function ApprovalsPage() {
       }
       const result = await api<{ status?: string; candidate_notified?: boolean; notification_error?: string; google_calendar_event_url?: string; start?: string }>('/integrations/google/automation/review/' + item.id + '/' + action, session, options)
       await load()
-      setCalendarEventUrl(result.google_calendar_event_url || '')
-      setCalendarEventDate(result.start || '')
+      setEditMode(current => { const next = { ...current }; delete next[item.id]; return next })
       if (result.notification_error) setNotice(result.notification_error)
       else if (result.status === 'rescheduled' && result.candidate_notified) {
         const message = 'Interview approved. Calendar updated and confirmation email sent successfully.'
@@ -657,14 +654,13 @@ function ApprovalsPage() {
     <PageIntro kicker="Reschedule requests" title="Review calendar changes." copy="The app checks the candidates requested date first. If it is unavailable or no date was given, it looks for the next free weekday slot while preserving the event duration and time zone." />
     {settings && <div className="sync-result">Automatic time suggestions are {settings.automatic_rescheduling_enabled ? 'ON' : 'OFF'}. {settings.automatic_rescheduling_enabled ? 'The app proposes an available slot; the meeting changes only after you approve it below.' : 'Choose a date and time for each request. The meeting changes only after you approve it.'}</div>}
     {notice && <div className={notice.includes('could not') ? 'error banner' : 'sync-result'}>{notice}</div>}
-    {calendarEventUrl && <div className="sync-actions" style={{ marginBottom: 16 }}><Link className="secondary" to={calendarEventDate ? '/dashboard/calendar?date=' + calendarDateKey(calendarEventDate, systemDisplayZone()) : '/dashboard/calendar'}>View in app calendar</Link><a className="secondary" href={calendarEventUrl} target="_blank" rel="noreferrer">Open updated event in Google Calendar</a></div>}
     {errors.page && <div className="error banner">{errors.page}</div>}
     <div className="sync-actions" style={{ marginBottom: 16 }}><button className="secondary" onClick={() => void load()}>Refresh requests</button></div>
     <div className="approval-list">
       {items.length ? items.map(item => {
         const proposedStart = item.start ? new Date(item.start) : null
         const proposedEnd = item.end ? new Date(item.end) : null
-        const dateValue = dates[item.id] ?? item.availability_date ?? item.requested_date ?? ''
+        const dateValue = dates[item.id] ?? (item.start ? item.start.slice(0, 10) : item.availability_date ?? item.requested_date ?? '')
         const proposedClock = proposedStart ? new Intl.DateTimeFormat('en-GB', { timeZone: item.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(proposedStart) : settings?.shift_start || '09:00'
         const timeValue = times[item.id] ?? proposedClock
         const shiftLabel = settings ? `${settings.shift_start}${settings.shift_end} ${item.timezone || 'UTC'}` : `Configured shift  ${item.timezone || 'UTC'}`
@@ -673,21 +669,22 @@ function ApprovalsPage() {
           <div className="approval-schedule-grid"><div><span>Candidate request</span><b>{item.requested_date || 'No date specified'}{item.candidate_requested_time ? `  ${item.candidate_requested_time}` : ''}</b></div><div><span>Working shift</span><b>{shiftLabel}</b></div><div className="approval-estimate"><span>Estimated schedule</span><b>{proposedStart && proposedEnd ? `${formatSystemTimestamp(proposedStart)} to ${formatSystemTime(proposedEnd)}` : 'Select a date and time'}</b><small>{item.used_next_available_date ? `Next available slot after ${item.requested_date || 'the requested date'}` : 'Checks calendar conflicts before saving'}</small></div></div>
           {item.body_preview && <button className="secondary approval-preview-toggle" type="button" onClick={() => setPreviewId(previewId === item.id ? null : item.id)}>{previewId === item.id ? 'Hide email preview' : 'Preview email'}</button>}
           {previewId === item.id && item.body_preview && <div className="approval-preview"><strong>Email request</strong><p>{item.body_preview}</p></div>}
-          {item.status !== 'ready' && <><p>{item.reason || 'Select a time for this reschedule.'}</p><div className="sync-actions"><label>New date<input type="date" value={dateValue} onChange={event => setDates(current => ({ ...current, [item.id]: event.target.value }))} /></label><label>Start time<input type="time" value={timeValue} onChange={event => setTimes(current => ({ ...current, [item.id]: event.target.value }))} /></label></div><small>Enter the time in the event time zone: {item.timezone || 'UTC'}.</small></>}
+          {(item.status !== 'ready' || editMode[item.id]) && <><p>{item.status === 'ready' ? 'Edit the suggested slot before approving if needed.' : (item.reason || 'Select a time for this reschedule.')}</p><div className="sync-actions"><label>New date<input type="date" value={dateValue} onChange={event => setDates(current => ({ ...current, [item.id]: event.target.value }))} /></label><label>Start time<input type="time" value={timeValue} onChange={event => setTimes(current => ({ ...current, [item.id]: event.target.value }))} /></label></div><small>Enter the time in the event time zone: {item.timezone || 'UTC'}.</small></>}
           {errors[item.id] && <div className="error">{errors[item.id]}</div>}
           <div className="sync-actions" style={{ marginTop: 16 }}>
-            {item.status === 'ready' && <button className="primary" onClick={() => void act(item, 'approve')}>Approve and reschedule</button>}
-            {item.status !== 'ready' && <button className="primary" disabled={!item.event_id} onClick={() => void act(item, 'approve')}>Use selected time</button>}
+            {item.status === 'ready' && !editMode[item.id] && <button className="secondary" onClick={() => setEditMode(current => ({ ...current, [item.id]: true }))}>Edit suggested time</button>}
+            {item.status === 'ready' && <button className="primary" onClick={() => void act(item, 'approve')}>Approve and send</button>}
+            {item.status !== 'ready' && <button className="primary" disabled={!item.event_id} onClick={() => void act(item, 'approve')}>Select and approve</button>}
             <button className="secondary" onClick={() => void act(item, 'decline')}>Dismiss request</button>
           </div>
-          {!item.event_id && <div><small>Review the related calendar invitation to link this request before approving the suggested time.</small><div className="sync-actions"><Link className="secondary" to={item.start ? '/dashboard/calendar?date=' + calendarDateKey(item.start, systemDisplayZone()) : '/dashboard/calendar'}>Open app calendar</Link></div></div>}
+          {!item.event_id && <div><small>Suggested date and time are shown above. Link a matching calendar invitation before confirming this request.</small></div>}
         </article>
       }) : <Panel title="No pending requests" subtitle="New Gmail messages are checked in the background"><Empty text="There are no reschedule requests waiting for review." /></Panel>}
     </div>
   </>
 }
 function RankingPage() { return <><PageIntro kicker="Workflow 2" title="Ranking and recruiter alerts." copy="Candidate rankings will appear here once requisition and applicant APIs are connected." /><Panel title="Active requisitions" subtitle="Database-backed records only"><Empty text="No requisitions available from the backend yet." /></Panel></> }
-function IntegrationsPage() { const { session, data } = useOutletData(); const location = useLocation(); if (!session) return <Loading />; const [googleConnected, setGoogleConnected] = useState(Boolean(data?.google_connected)); const [googleReconnectRequired, setGoogleReconnectRequired] = useState(false); const [outlookConnected, setOutlookConnected] = useState(false); const [status, setStatus] = useState(''); useEffect(() => { const params = new URLSearchParams(location.search); if (params.get('google') === 'connected') setStatus('Google connected. Gmail and Calendar access are ready.'); else if (params.get('google') === 'error') setStatus(`Google authorization failed: ${params.get('reason') || 'please try again'}`) }, [location.search]); useEffect(() => { if (!session) return; (async () => { try { const [googleStatus, outlookStatus] = await Promise.all([ api<{ connected: boolean; reconnect_required?: boolean; message?: string }>('/integrations/google/status', session), api<{ connected: boolean }>('/integrations/outlook/status', session), ]); setGoogleConnected(googleStatus.connected); setGoogleReconnectRequired(Boolean(googleStatus.reconnect_required)); setOutlookConnected(outlookStatus.connected); if (googleStatus.reconnect_required) setStatus('Google access expired or was revoked. Reconnect Google below to resume Gmail and Calendar.'); } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to load connection status') } })(); }, [session.access_token, session.user.id]); const connectGoogle = async () => { try { const result = await api<{ authorization_url: string }>('/integrations/google/authorize', session); window.location.href = result.authorization_url } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to connect Google') } }; const connectOutlook = async () => { try { const result = await api<{ authorization_url: string }>('/integrations/outlook/authorize', session); setOutlookConnected(true); window.location.href = result.authorization_url } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to connect Outlook') } }; const googleLabel = googleConnected ? 'Reconnect' : googleReconnectRequired ? 'Reconnect Google' : 'Connect Google'; const googleState = googleConnected ? 'connected' : googleReconnectRequired ? 'reconnect required' : 'not connected'; return <><PageIntro kicker="Connected systems" title="Integrations." copy="Connect Gmail, Google Calendar, and Microsoft Outlook directly from your application workspace." />{status && <div className={status.startsWith('Google connected') ? 'sync-result' : 'error banner'}>{status}</div>}<div className="integration-grid"><Integration name="Gmail" status={googleState} action={connectGoogle} label={googleLabel} /><Integration name="Google Calendar" status={googleState} action={connectGoogle} label={googleLabel} /><Integration name="Microsoft Outlook" status={outlookConnected ? 'connected' : 'not connected'} action={connectOutlook} label={outlookConnected ? 'Reconnect' : 'Connect Outlook'} /></div></> }
+function IntegrationsPage() { const { session, data } = useOutletData(); const location = useLocation(); if (!session) return <Loading />; const [googleConnected, setGoogleConnected] = useState(Boolean(data?.google_connected)); const [googleReconnectRequired, setGoogleReconnectRequired] = useState(false); const [outlookConnected, setOutlookConnected] = useState(false); const [status, setStatus] = useState(''); useEffect(() => { const params = new URLSearchParams(location.search); if (params.get('google') === 'connected') setStatus('Google connected. Gmail and Calendar access are ready.'); else if (params.get('google') === 'error') setStatus(`Google authorization failed: ${params.get('reason') || 'please try again'}`) }, [location.search]); useEffect(() => { if (!session) return; (async () => { try { const [googleStatus, outlookStatus] = await Promise.all([ api<{ connected: boolean; reconnect_required?: boolean; message?: string }>('/integrations/google/status', session), api<{ connected: boolean }>('/integrations/outlook/status', session), ]); setGoogleConnected(googleStatus.connected); setGoogleReconnectRequired(Boolean(googleStatus.reconnect_required)); setOutlookConnected(outlookStatus.connected); if (googleStatus.reconnect_required) setStatus('Google access expired or was revoked. Reconnect Google below to resume Gmail and Calendar.'); } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to load connection status') } })(); }, [session.access_token, session.user.id]); const connectGoogle = async () => { try { const result = await api<{ authorization_url: string }>('/integrations/google/authorize', session); window.location.href = result.authorization_url } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to connect Google') } }; const connectOutlook = async () => { try { const result = await api<{ authorization_url: string }>('/integrations/outlook/authorize', session); setOutlookConnected(true); window.location.href = result.authorization_url } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to connect Outlook') } }; const disconnectGoogle = async () => { try { await api('/integrations/google', session, { method: 'DELETE' }); setGoogleConnected(false); setGoogleReconnectRequired(false); setStatus('Google disconnected successfully.') } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to disconnect Google') } }; const disconnectOutlook = async () => { try { await api('/integrations/outlook', session, { method: 'DELETE' }); setOutlookConnected(false); setStatus('Outlook disconnected successfully.') } catch (e) { setStatus(e instanceof Error ? e.message : 'Unable to disconnect Outlook') } }; const googleLabel = googleConnected ? 'Reconnect' : googleReconnectRequired ? 'Reconnect Google' : 'Connect Google'; const googleState = googleConnected ? 'connected' : googleReconnectRequired ? 'reconnect required' : 'not connected'; return <><PageIntro kicker="Connected systems" title="Integrations." copy="Connect Gmail, Google Calendar, and Microsoft Outlook directly from your application workspace." />{status && <div className={status.startsWith('Google connected') || status.includes('disconnected successfully') ? 'sync-result' : 'error banner'}>{status}</div>}<div className="integration-grid"><Integration name="Gmail" status={googleState} action={connectGoogle} label={googleLabel} disconnect={googleConnected ? disconnectGoogle : undefined} /><Integration name="Google Calendar" status={googleState} action={connectGoogle} label={googleLabel} disconnect={googleConnected ? disconnectGoogle : undefined} /><Integration name="Microsoft Outlook" status={outlookConnected ? 'connected' : 'not connected'} action={connectOutlook} label={outlookConnected ? 'Reconnect' : 'Connect Outlook'} disconnect={outlookConnected ? disconnectOutlook : undefined} /></div></> }
 function AuditPage() { return <><PageIntro kicker="Observability" title="Audit trail." copy="Every workflow action will be rendered from backend audit records as that API is added." /><Panel title="Append-only event trail" subtitle="Trigger, decisions, guardrails, approvals, actions"><Empty text="No audit events available from the backend." /></Panel></> }
 function NotificationsPage() {
   const { session } = useOutletData()
@@ -804,7 +801,7 @@ function PageIntro({ kicker, title, copy }: { kicker: string; title: string; cop
 function Panel({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) { return <section className="card"><div className="card-head"><div><h3>{title}</h3><p>{subtitle}</p></div></div>{children}</section> }
 function Kpi({ label, value, tone }: { label: string; value: string | number; tone: string }) { return <div className={`kpi ${tone}`}><span>{label}</span><strong>{value}</strong><small>From live database</small></div> }
 function Workflow({ label, alt = false }: { label: string; alt?: boolean }) { return <div className="workflow-row"><span className={`workflow-mark ${alt ? 'alt' : ''}`}></span><div><b>{label}</b><small>{alt ? 'Human decision boundary' : 'Backend automation path'}</small></div></div> }
-function Integration({ name, status, action, label }: { name: string; status: string; action: () => void; label: string }) { return <section className="integration-card"><div className="integration-title"><span className="integration-logo">{name[0]}</span><div><h3>{name}</h3><p>OAuth 2.0 API</p></div></div><span className="badge">{status}</span><button className="secondary" onClick={action}>{label}</button></section> }
+function Integration({ name, status, action, label, disconnect }: { name: string; status: string; action: () => void; label: string; disconnect?: () => void }) { return <section className="integration-card"><div className="integration-title"><span className="integration-logo">{name[0]}</span><div><h3>{name}</h3><p>OAuth 2.0 API</p></div></div><span className="badge">{status}</span><div className="sync-actions"><button className="secondary" onClick={action}>{label}</button>{status === 'connected' && disconnect && <button className="secondary" onClick={disconnect}>Disconnect</button>}</div></section> }
 function Empty({ text }: { text: string }) { return <div className="empty"><span></span>{text}</div> }
 function Loading() { return <div className="loading">Loading live data</div> }
 function useOutletData() { const outlet = useOutletContext<{ session: Session; data: OverviewData | null; refresh: () => Promise<void> } | null>(); const saved = localStorage.getItem('recruiter-session'); const session = outlet?.session ?? (saved ? JSON.parse(saved) as Session : null); const data = outlet?.data ?? (session ? { user: session.user, metrics: { email_count: 0, reschedule_count: 0 }, google_connected: false } : null); return { session, data } }

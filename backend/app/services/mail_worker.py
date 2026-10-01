@@ -36,7 +36,7 @@ async def sync_connected_inboxes() -> None:
                 known_ids = set((await session.scalars(select(EmailMessage.provider_message_id).where(
                     EmailMessage.user_id == user_id, EmailMessage.provider == "outlook"
                 ))).all())
-                for message_id in await run_sync(outlook_list_message_ids, token, 50):
+                for message_id in await run_sync(outlook_list_message_ids, token, None):
                     if message_id in known_ids:
                         continue
                     message = await run_sync(outlook_read_message, token, message_id)

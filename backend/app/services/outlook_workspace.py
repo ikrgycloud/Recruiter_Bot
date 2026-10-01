@@ -47,13 +47,24 @@ def _request(token: dict[str, Any], method: str, path: str, **kwargs):
     return response
 
 
-def list_message_ids(token: dict[str, Any], max_results: int = 50) -> list[str]:
+def list_message_ids(token: dict[str, Any], max_results: int | None = None) -> list[str]:
     # /me/messages works for both Outlook.com and Microsoft 365 mailboxes;
     # localized folder names can make /mailFolders/inbox return an empty page.
-    response = _request(token, "GET", "/me/messages", params={
-        "$top": min(max_results or 50, 100), "$select": "id", "$orderby": "receivedDateTime desc",
-    })
-    return [item["id"] for item in response.json().get("value", [])]
+    limit = max_results if max_results and max_results > 0 else None
+    next_url: str | None = GRAPH + "/me/messages"
+    params: dict[str, Any] | None = {"$top": min(limit or 100, 100), "$select": "id", "$orderby": "receivedDateTime desc"}
+    message_ids: list[str] = []
+    while next_url:
+        response = httpx.get(next_url, headers={"Authorization": f"Bearer {token['access_token']}"}, params=params, timeout=25)
+        if response.is_error:
+            raise ValueError(f"Microsoft Graph request failed ({response.status_code})")
+        payload = response.json()
+        message_ids.extend(item["id"] for item in payload.get("value", []) if item.get("id"))
+        if limit and len(message_ids) >= limit:
+            return message_ids[:limit]
+        next_url = payload.get("@odata.nextLink")
+        params = None
+    return message_ids
 
 
 def read_message(token: dict[str, Any], message_id: str) -> dict[str, Any]:
